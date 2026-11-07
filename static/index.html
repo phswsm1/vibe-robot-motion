@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Robot Teleop: MediaPipe AI & YOLOv8 Detection</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: #0b0e14;
+      color: #e6edf3;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      padding: 18px;
+    }
+    header { text-align: center; margin-bottom: 14px; }
+    h1 { font-size: 24px; color: #58a6ff; }
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-top: 6px;
+      background: #30363d;
+      color: #8b949e;
+    }
+    .badge.connected { background: #238636; color: #fff; }
+    .badge.disconnected { background: #da3633; color: #fff; }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 16px;
+      max-width: 1080px;
+      width: 100%;
+    }
+    @media (max-width: 860px) {
+      .main-grid { grid-template-columns: 1fr; }
+    }
+
+    .video-card, .controls-card, .ai-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 12px 24px rgba(0,0,0,0.4);
+    }
+    .video-viewport {
+      width: 100%;
+      height: 460px;
+      background: #000;
+      border-radius: 10px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    .video-viewport img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .side-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* AI Pinch Indicator Card */
+    .pinch-indicator {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: #21262d;
+      border: 2px solid #30363d;
+      margin-bottom: 10px;
+      transition: all 0.2s ease;
+    }
+    .pinch-indicator.pinched {
+      background: #143821;
+      border-color: #238636;
+      box-shadow: 0 0 15px rgba(35, 134, 54, 0.4);
+    }
+    .pinch-indicator.grabbed {
+      background: #3d0c35;
+      border-color: #d124aa;
+      box-shadow: 0 0 15px rgba(209, 36, 170, 0.4);
+    }
+    .pinch-status-text {
+      font-size: 15px;
+      font-weight: 800;
+      color: #8b949e;
+    }
+    .pinch-indicator.pinched .pinch-status-text { color: #3fb950; }
+    .pinch-indicator.grabbed .pinch-status-text { color: #ff3df0; }
+
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      margin-bottom: 5px;
+      color: #8b949e;
+    }
+    .stat-val { color: #e6edf3; font-family: monospace; font-weight: 600; }
+
+    .object-tag {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: #1f242c;
+      border: 1px solid #30363d;
+      font-size: 11px;
+      margin: 2px;
+      color: #58a6ff;
+    }
+
+    /* D-pad */
+    .dpad {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin: 10px 0;
+    }
+    .btn {
+      padding: 12px;
+      font-size: 14px;
+      font-weight: bold;
+      background: #21262d;
+      border: 1px solid #30363d;
+      color: #e6edf3;
+      border-radius: 10px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .btn:hover { background: #30363d; }
+    .btn:active { transform: scale(0.96); background: #1f6feb; }
+    .btn.stop { background: #da3633; border-color: #f85149; }
+    .btn.stop:hover { background: #b62324; }
+
+    .telemetry {
+      background: #0d1117;
+      border: 1px solid #21262d;
+      padding: 8px 10px;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 12px;
+      height: 100px;
+      overflow-y: auto;
+      color: #7ee787;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🤖 Robot Teleop: MediaPipe AI & YOLOv8 Interface</h1>
+    <div id="statusBadge" class="badge disconnected">DISCONNECTED</div>
+  </header>
+
+  <div class="main-grid">
+    <!-- Left: Video Stream with Combined MediaPipe + YOLO Overlay -->
+    <div class="video-card">
+      <div class="video-viewport">
+        <img id="streamView" alt="Connecting to stream..." />
+      </div>
+    </div>
+
+    <!-- Right: Teleop & AI Telemetry Stack -->
+    <div class="side-stack">
+      <!-- MediaPipe + YOLO Telemetry -->
+      <div class="ai-card">
+        <h3 style="font-size: 15px; margin-bottom: 8px; color: #58a6ff;">🎯 Vision & Object Interaction</h3>
+        <div id="pinchBox" class="pinch-indicator">
+          <span>INTERACTION</span>
+          <span id="pinchLabel" class="pinch-status-text">STANDBY</span>
+        </div>
+        <div class="stat-row">
+          <span>Target Object:</span>
+          <span id="statTarget" class="stat-val" style="color: #ff3df0;">NONE</span>
+        </div>
+        <div class="stat-row">
+          <span>Pinch Distance:</span>
+          <span id="statDist" class="stat-val">-- px</span>
+        </div>
+        <div class="stat-row">
+          <span>Detected Objects:</span>
+          <div id="objectTags" style="text-align: right; max-width: 190px;">None</div>
+        </div>
+      </div>
+
+      <!-- Directional Teleop Controls -->
+      <div class="controls-card">
+        <h3 style="font-size: 15px; margin-bottom: 6px; color: #58a6ff;">Directional Teleop</h3>
+        <div class="dpad">
+          <div></div>
+          <button class="btn" onclick="sendCommand('FORWARD', 0.5, 0.0)">▲<br>W</button>
+          <div></div>
+          <button class="btn" onclick="sendCommand('LEFT', 0.0, -0.5)">◀<br>A</button>
+          <button class="btn stop" onclick="sendCommand('STOP', 0.0, 0.0)">STOP<br>Space</button>
+          <button class="btn" onclick="sendCommand('RIGHT', 0.0, 0.5)">▶<br>D</button>
+          <div></div>
+          <button class="btn" onclick="sendCommand('BACKWARD', -0.5, 0.0)">▼<br>S</button>
+          <div></div>
+        </div>
+
+        <div id="log" class="telemetry">[SYSTEM] Ready.</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const streamView = document.getElementById('streamView');
+    const statusBadge = document.getElementById('statusBadge');
+    const logBox = document.getElementById('log');
+
+    const pinchBox = document.getElementById('pinchBox');
+    const pinchLabel = document.getElementById('pinchLabel');
+    const statTarget = document.getElementById('statTarget');
+    const statDist = document.getElementById('statDist');
+    const objectTags = document.getElementById('objectTags');
+
+    function log(msg) {
+      logBox.innerHTML += `<br>[${new Date().toLocaleTimeString()}] ${msg}`;
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws/stream`;
+    let ws = null;
+    let lastSelected = null;
+
+    function connect() {
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        statusBadge.textContent = 'CONNECTED';
+        statusBadge.className = 'badge connected';
+        log('WebSocket stream connected.');
+      };
+
+      ws.onmessage = (event) => {
+        if (event.data instanceof Blob) {
+          const url = URL.createObjectURL(event.data);
+          streamView.src = url;
+          streamView.onload = () => URL.revokeObjectURL(url);
+        } else if (typeof event.data === 'string') {
+          try {
+            const packet = JSON.parse(event.data);
+            if (packet.type === 'telemetry') {
+              updateTelemetry(packet.data);
+            }
+          } catch (e) {
+            console.error('JSON parse error:', e);
+          }
+        }
+      };
+
+      ws.onclose = () => {
+        statusBadge.textContent = 'DISCONNECTED';
+        statusBadge.className = 'badge disconnected';
+        log('Disconnected. Reconnecting in 2s...');
+        setTimeout(connect, 2000);
+      };
+
+      ws.onerror = (err) => console.error('WS Error:', err);
+    }
+
+    function updateTelemetry(data) {
+      // 1. Interaction & Pinch Status
+      if (data.selected_object) {
+        pinchBox.className = 'pinch-indicator grabbed';
+        pinchLabel.textContent = `GRABBED: ${data.selected_object.toUpperCase()}`;
+        statTarget.textContent = data.selected_object.toUpperCase();
+        if (lastSelected !== data.selected_object) {
+          log(`🎯 Object Selected: [${data.selected_object}] (PINCHED)`);
+          lastSelected = data.selected_object;
+        }
+      } else if (data.hovered_object) {
+        pinchBox.className = 'pinch-indicator';
+        pinchLabel.textContent = `HOVER: ${data.hovered_object.toUpperCase()}`;
+        statTarget.textContent = `${data.hovered_object} (Touch)`;
+        lastSelected = null;
+      } else if (data.pinch) {
+        pinchBox.className = 'pinch-indicator pinched';
+        pinchLabel.textContent = 'PINCHED (Air)';
+        statTarget.textContent = 'NONE';
+        lastSelected = null;
+      } else {
+        pinchBox.className = 'pinch-indicator';
+        pinchLabel.textContent = data.hand_detected ? 'OPEN ✋' : 'NO HAND';
+        statTarget.textContent = 'NONE';
+        lastSelected = null;
+      }
+
+      statDist.textContent = `${data.pinch_distance_px} px`;
+
+      // 2. Render YOLO Detected Objects
+      if (data.detected_objects && data.detected_objects.length > 0) {
+        objectTags.innerHTML = data.detected_objects
+          .map(obj => `<span class="object-tag">${obj.class} (${Math.round(obj.confidence * 100)}%)</span>`)
+          .join('');
+      } else {
+        objectTags.innerHTML = '<span style="color:#6e7681;">None (>50%)</span>';
+      }
+    }
+
+    function sendCommand(action, linear, angular) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        const payload = { action, linear, angular, timestamp: Date.now() };
+        ws.send(JSON.stringify(payload));
+        log(`TX: ${action} (v=${linear}, w=${angular})`);
+      }
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      if (e.key === 'w' || e.key === 'W' || e.key === 'ArrowUp') sendCommand('FORWARD', 0.5, 0.0);
+      else if (e.key === 's' || e.key === 'S' || e.key === 'ArrowDown') sendCommand('BACKWARD', -0.5, 0.0);
+      else if (e.key === 'a' || e.key === 'A' || e.key === 'ArrowLeft') sendCommand('LEFT', 0.0, -0.5);
+      else if (e.key === 'd' || e.key === 'D' || e.key === 'ArrowRight') sendCommand('RIGHT', 0.0, 0.5);
+      else if (e.key === ' ') sendCommand('STOP', 0.0, 0.0);
+    });
+
+    connect();
+  </script>
+</body>
+</html>
